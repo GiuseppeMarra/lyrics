@@ -1,114 +1,224 @@
 from pyparsing import *
-from CLARE import current_world as world
+from CLARE_future import current_world as world
 import tensorflow as tf
 import operator
 import copy
 ParserElement.enablePackrat()
 
+class PNode(object):
+    """The PNode class represents a generic node of a parsing tree.
+            Attributes
+            ----------
+            args : array of PNode s
+                Arguments of the node
+            label : str
+                The node label.
+            tensor: tf.Tensor
+                The tensor object containing the value of the node
 
-class Variable(object):
+            """
 
-        def __init__(self, name, constraint):
-            self.name = name
-            self.constraint = constraint
-            if self.name in world.individuals:
-                raise ParseFatalException(
-                    "Ambiguity for the variable '%s' in constraint '%s': in the world, an individual with the same name exists." % (
-                    self.name, self.constraint.definition))
-            self.domain = None
-            self.tensor = None
-            self.vars = [self] #it is a generic property of Terms; needed to keep a standard way to process
-
-        def compile(self):
-            if self.tensor== None:
-                assert(self.domain!=None, "Trying to compile variable %s before assigning a domain" % self.name)
-                self.tensor = self.domain.tensor
-                for i in range(len(self.constraint.variables_list)):
-                    if self.constraint.variables_list[i]!=self:
-                        self.tensor = tf.expand_dims(self.tensor, i)
-
-
-
-        def check_or_assign_domain(self, domain):
-            if self.domain is None:
-                self.domain = domain
-            else:
-                assert (self.domain == domain,
-                        "Inconsistency between the domains in which variable %s has been used. Previous: %s, New: %s" %
-                        (self.name, self.domain.label, domain.label))
-
-class Number(object):
-
-    def __init__(self, tokens):
-        self.tensor = tf.reshape(tf.constant(float(tokens[0])), [1,1])
+    def __init__(self, t):
+        self.args = []
+        self.label = None
+        self.tensor = None
 
     def compile(self):
-        pass
+        for i in self.args:
+            i.compile()
 
-class Constant(object):
-    def __init__(self, name, constraint):
+    def __str__(self):
+        return self.label
+
+    def __iter__(self):
+        for i in self.args:
+            yield i
+
+
+class Term(PNode):
+    def __init__(self):
+        super(Term, self).__init__(None)
+
+class Number(Term):
+    """This class represent numbers used in constraint. They are a fast way of using numbers
+    without the explicit definition of a numeric domain and of a constant in that domain.
+
+    Attributes
+    ----------
+    tensor: tf.Tensor
+       The tensor object containing the number
+    """
+
+    def __init__(self, tokens, constraint):
+        super(Number, self).__init__()
+        self.number = float(tokens[0])
+        self.constraint = constraint
+
+    def compile(self):
+        super(Number,self).compile()
+        self.tensor = tf.reshape(tf.constant(self.number),
+                                 tf.concat((tf.ones_like(self.constraint.cartesian_shape), [1]), axis=0))
+
+
+
+class Constant(Term):
+    """This class represent a constant belonging to a domain. It is linked one2one with a previously defined
+    individual for this domain.
+
+    Attributes
+    ----------
+    name: str
+        The name of this constant in the constraint
+    individual: Individual
+        The individual object linked to this constant
+    domain: Domain
+        The domain object of this constant
+    tensor: tf.Tensor
+       The tensor object containing the constant values
+    """
+    def __init__(self, name, constraint, domain=None, index=None):
+        super(Constant, self).__init__()
         self.name = name
         self.constraint = constraint
-        self.individual = world.individuals[self.name]
-        self.domain = self.individual.domain
-        self.tensor = self.individual.tensor
+        if domain is None:
+            self.individual = world.individuals[self.name]
+            self.domain = self.individual.domain
+            self.tensor = self.individual.tensor
+        else:
+            self.domain = world.domains[domain]
+            self.tensor = self.domain.tensor[index,:]
 
     def compile(self):
         pass
+
+class Variable(Term):
+    """This class represent a variable in a constraint.
+
+       Attributes
+       ----------
+       name: str
+           The name of this variable in the constraint
+       domain: Domain
+           The domain object of this constant. This is not defined from the beginning but will
+           be assigned by functions and predicates on the basis of their domains
+       vars: list of :type:Variable
+           This is a common property for variable-dependent terms used for correct reshaping of
+           tensor based on the variables.
+       tensor: tf.Tensor
+          The tensor object containing the constant values
+
+
+       """
+
+    def __init__(self, name, constraint):
+        super(Variable, self).__init__()
+        self.name = name
+        self.constraint = constraint
+        if self.name in world.individuals:
+            raise ParseFatalException(
+                "Ambiguity for the variable '%s' in constraint '%s': in the world, an individual with the same name exists." % (
+                    self.name, self.constraint.definition))
+        self.domain = None
+        self.tensor = None
+        self.vars = [
+            self]  # it is a generic property of Terms that are variable dependent; needed to keep a standard way to process
+
+    def compile(self):
+        if self.tensor == None:
+            assert self.domain != None, "Trying to compile variable %s before assigning a domain" % self.name
+            self.tensor = self.domain.tensor
+
+            # Expanding the variable to the constraint shape (i.e. the one depending on the variables defined)
+            for i in range(len(self.constraint.variables_list)):
+                if self.constraint.variables_list[i] != self:
+                    self.tensor = tf.expand_dims(self.tensor, i)
+
+    def check_or_assign_domain(self, domain):
+        """Variables do not know their domain until a Function or a Relation assign one to them on the basis
+        of their domain."""
+
+        if self.domain is None:
+            self.domain = domain
+        else:
+            assert self.domain == domain,\
+                   "Inconsistency between the domains in which variable %s has been used. Previous: %s, New: %s" %\
+                    (self.name, self.domain.label, domain.label)
 
 def create_or_get_variable(tokens, constraint):
     var_name = tokens[0]
-    return constraint.create_or_get_variable(var_name)
+    if var_name in constraint.variables_dict:
+        return constraint.variables_dict[var_name]
+    else:
+        new_var = Variable(var_name, constraint)
+        constraint.variables_dict[var_name] = new_var
+        constraint.variable_indices[var_name] = len(constraint.variables_list)
+        constraint.variables_list.append(new_var)
+        return new_var
 
 def create_or_get_constant(tokens, constraint):
-    const_id = tokens[0]
-    return constraint.create_or_get_constant(const_id)
+    if len(tokens)==1: #constant defined by label
+        id = tokens[0]
+        if id in constraint.constant_dict:
+            return constraint.constant_dict[id]
+        else:
+            new_const = Constant(id, constraint)
+            constraint.constant_dict[id] = new_const
+            return new_const
+    else: #constant defined by domain indexing (e.g. D[32])
+        domain = tokens[0]
+        index = int(tokens[1])
+        return Constant(name=domain+str(index),
+                        constraint=constraint,
+                        domain=domain,
+                        index=index)
 
 
-class Function(object):
+
+
+class Function(Term):
     def __init__(self, t, constraint):
+        super(Function, self).__init__()
         self.constraint = constraint
         self.name = t[0]
-        if self.name not in world.functions:
-            raise Exception("There is no function " + self.name)
+        assert self.name in world.functions, "There is no function " + self.name
         self.args = t[1:]
 
         self.function = world.functions[self.name]
         self.tensor = None
 
-        if len(self.args) != len(self.function.domains):
-            raise Exception("Wrong number of variables for function " + self.name)
+        assert len(self.args) == len(self.function.domains), "Wrong number of arguments for function " + self.name
 
-        self.all_vars = True # flag for functions defined only on variables
-        self.argument_to_variable = {}
-        for i, v in enumerate(self.args):
-            assert (isinstance(v, Variable) or isinstance(v, Constant) or isinstance(v, Function) or isinstance(v, Number),
-                    "Function object %s has an argument that is not Variable nor a Constant nor a Function nor a Number: %s " % (
-                    self.name, str(v)))
-            if isinstance(v, Variable):
-                v.check_or_assign_domain(self.function.domains[i])
-            else:
-                self.all_vars = False
-
+        #Checking arguments consistency
+        self.all_vars= True
         self.vars = []
         for i, arg in enumerate(self.args):
-            if isinstance(arg, Constant): continue
-            if isinstance(arg, Number):
-                if self.function.domains[i].tensor.get_shape()[1] != 1:
-                    raise Exception("Function %s does not accept Numbers as %d argument" % (self.name, i))
+            assert isinstance(arg, Term),"Function object %s has an argument that is not a Term: %s " % (self.name, str(arg))
+            if isinstance(arg, Constant):
+                self.all_vars = False
                 continue
+            elif isinstance(arg, Number):
+                self.all_vars = False
+                assert self.function.domains[i].tensor.get_shape()[1] == 1,"Function %s does not accept Numbers as %d argument" % (self.name, i)
+                continue
+            elif isinstance(arg, Variable):
+                arg.check_or_assign_domain(self.function.domains[i])
+            else: #isinstance(arg, Function):
+                self.all_vars = False
             for var in arg.vars:
                 if var not in self.vars:
                     self.vars.append(var)
 
-
-
     def compile(self):
-
         for i in self.args:
             i.compile()
 
+        if len(self.vars)==1 and self.all_vars:
+            self.tensor =  self.function.domain_value
 
+        '''We want to work always with tensors of the same number of dimensions (i.e. rank), that is
+        the cartesian shape of the constraint. In this code, we create a `function_shape`,
+        that is equal to the cartesian shape apart from those variables not present in this
+        function, whose dimensions will be set to 1'''
         self.function_shape = copy.copy(self.constraint.cartesian_shape)
         set_ = set(self.vars)
         for i, var_constr in enumerate(self.constraint.variables_list):
@@ -117,12 +227,12 @@ class Function(object):
 
         fun_shape = tf.stack(self.function_shape, axis=0)
 
-        tensors = []
+        tensors = [] #tensor arguments for the function implementation
         for arg in self.args:
 
             shape = tf.shape(arg.tensor)
-            shape_arg = shape[:-1] # not considering domain columns
-            size = shape[-1]
+            shape_arg = shape[:-1] # shape_arg is same rank of cartesian shape but with 1 in non-dependent variable; we do not consider domain dimension (-1)
+            size = shape[-1] #domain dimension
             to_repeat = tf.reshape(fun_shape - shape_arg + 1, [-1]) # putting to 1 all existent axis
 
             to_repeat = tf.concat((to_repeat, [1]), axis = 0)  # adding no repetition for domain columns
@@ -132,7 +242,7 @@ class Function(object):
 
         self.tensor = self.function.evaluate(tensors)
 
-        # bringing back the tensor to its function shape and puttind the new dimension as last dimension
+        # bringing back the tensor to its function shape and putting the new dimension as last dimension
         last_dim = tf.shape(self.tensor)[-1]
         self.tensor = tf.reshape(self.tensor, tf.concat((fun_shape, [last_dim]), 0))
 
@@ -148,30 +258,24 @@ class Atomic(object):
         self.predicate = world.relations[self.name]
         self.tensor = None
 
-        if len(self.args) != len(self.predicate.domains):
-            raise Exception("Wrong number of variables for predicate " + self.name)
-
-        for i, v in enumerate(self.args):
-            assert (isinstance(v, Variable) or isinstance(v, Constant) or isinstance(v, Function) or isinstance(v, Number),
-                    "Atomic object %s has an argument that is not Variable nor a Constant nor a Function nor a Number: %s " % (
-                    self.name, str(v)))
-            if isinstance(v, Variable):
-                v.check_or_assign_domain(self.predicate.domains[i])
+        assert len(self.args) == len(self.predicate.domains),"Wrong number of arguments for predicate " + self.name
 
 
-        if self.name in self.constraint.atomics:
-            self.constraint.atomics[self.name].append(self)
-        else:
-            self.constraint.atomics[self.name] = [self]
-
-
+        self._all_vars = True
         self.vars = []
         for i, arg in enumerate(self.args):
-            if isinstance(arg, Constant): continue
-            if isinstance(arg, Number):
-                if self.predicate.domains[i].tensor.get_shape()[1] != 1:
-                    raise Exception("Predicate %s does not accept Numbers as %d argument" %(self.name, i))
+            assert isinstance(arg, Term),"Atomic object %s has an argument that is not a Term" % self.name
+            if isinstance(arg, Constant):
+                self._all_vars = False
                 continue
+            elif isinstance(arg, Number):
+                self._all_vars = False
+                assert self.predicate.domains[i].tensor.get_shape()[1] == 1,"Relation %s does not accept Numbers as %d argument" %(self.name, i)
+                continue
+            elif isinstance(arg, Variable):
+                arg.check_or_assign_domain(self.predicate.domains[i])
+            else: # isinstance(arg, Function)
+                self._all_vars = False
             for var in arg.vars:
                 if var not in self.vars:
                     self.vars.append(var)
@@ -180,6 +284,9 @@ class Atomic(object):
     def compile(self):
         for i in self.args:
             i.compile()
+
+        if len(self.vars)==1 and self._all_vars:
+            self.tensor =  self.predicate.domain_value
 
         self.function_shape = copy.copy(self.constraint.cartesian_shape)
         set_ = set(self.vars)
@@ -214,34 +321,7 @@ class Atomic(object):
 
 
 
-class PNode(object):
-    """The PNode class represents a generic node of a parsing tree.
-            Attributes
-            ----------
-            args : array of PNode s
-                Arguments of the node
-            label : str
-                The node operation label.
-            tensor: tf.Tensor
-                The tensor object containing the truth value of the operation
 
-            """
-
-    def __init__(self, t):
-        self.args = []
-        self.label = None
-        self.tensor = None
-
-    def compile(self):
-        for i in self.args:
-            i.compile()
-
-    def __str__(self):
-        return self.label
-
-    def __iter__(self):
-        for i in self.args:
-            yield i
 
 
 class Op(PNode):
@@ -268,7 +348,7 @@ class And(Op):
             Attributes
             ----------
             args : array of PNode s
-                The two arguments of the node
+                The arguments of the node
             label : str
                 The node operation label.
             tensor: tf.Tensor
@@ -281,7 +361,6 @@ class And(Op):
 
     def compile(self):
         super(And, self).compile()
-        sess = tf.Session()
         self.tensor = world.logic.weak_conj([a.tensor for a in self.args])
 
 
@@ -290,7 +369,7 @@ class Or(Op):
             Attributes
             ----------
             args : array of PNode s
-                The two arguments of the node
+                The  arguments of the node
             label : str
                 The node operation label.
             tensor: tf.Tensor
@@ -429,12 +508,22 @@ class Exists_n(Quantifier):
 class FOLParser(object):
     def _createParseAction(self, class_name, constraint):
         def _create(tokens):
-            if class_name == "Variable":
+            if class_name == "Number":
+                return Number(tokens, constraint)
+            elif class_name == "Variable":
                 return create_or_get_variable(tokens, constraint)
             elif class_name == "Constant":
                 return create_or_get_constant(tokens, constraint)
             elif class_name == "Function":
                 return Function(tokens, constraint)
+            # elif class_name == "PLUS":
+            #     return Plus(tokens, constraint)
+            # elif class_name == "MINUS":
+            #     return Minus(tokens, constraint)
+            # elif class_name == "TIMES":
+            #     return Multipy(tokens, constraint)
+            # elif class_name == "DIVIDE":
+            #     return Divide(tokens, constraint)
             elif class_name == "Atomic":
                 return Atomic(tokens, constraint)
             elif class_name == "NOT":
@@ -453,77 +542,55 @@ class FOLParser(object):
                 return Exists(constraint, tokens)
             elif class_name == "EXISTN":
                 return Exists_n(constraint, tokens)
-            elif class_name == "Number":
-                return Number(tokens)
+            elif class_name == "ARITHM_REL":
+                #TODO
+                raise NotImplementedError("Arithmetic Relations not already implemented")
+
 
         return _create
 
-    # def parse(self, definition, constraint):
-    #
-    #     left_parenthesis, right_parenthesis, colon = map(Suppress, "():")
-    #     symbol = Word(alphas)
-    #     number = Word(nums)
-    #
-    #     ''' TERMS '''
-    #     term = Forward()
-    #     var = symbol
-    #     var.setParseAction(self._createParseAction("Variable", constraint))
-    #     const = oneOf(list(world.individuals.keys()))
-    #     const.setParseAction(self._createParseAction("Constant", constraint))
-    #     func = oneOf(list(world.functions.keys()))
-    #     func_term = func + left_parenthesis + delimitedList(term) + right_parenthesis
-    #     func_term.setParseAction(self._createParseAction("Function", constraint))
-    #     term << (func_term | const | var )
-    #
-    #     ''' FORMULAS '''
-    #     formula = Forward()
-    #     not_ = Keyword("not")
-    #     and_ = Keyword("and")
-    #     or_ = Keyword("or")
-    #     implies = Keyword("->")
-    #     iff = Keyword("<->")
-    #     forall = Keyword("forall") + var + colon
-    #     # forall.setParseAction(self._createParseAction("FORALL", constraint))
-    #     exists = Keyword("exists") + var + colon
-    #     # exists.setParseAction(self._createParseAction("EXISTS", constraint))
-    #     exists_n = Keyword("existn ") + number + var + colon
-    #     # exists_n.setParseAction(self._createParseAction("EXISTN", constraint))
-    #     # quantifier = forall | exists | exists_n
-    #
-    #     relation = oneOf(list(world.relations))
-    #     atomic_formula = relation + left_parenthesis + delimitedList(term) + right_parenthesis
-    #     atomic_formula.setParseAction(self._createParseAction("Atomic", constraint))
-    #     formula << infixNotation(atomic_formula, [
-    #         (not_, 1, opAssoc.RIGHT, self._createParseAction("NOT", constraint)),
-    #         (and_, 2, opAssoc.LEFT, self._createParseAction("AND", constraint)),
-    #         (or_, 2, opAssoc.LEFT, self._createParseAction("OR", constraint)),
-    #         (implies, 2, opAssoc.RIGHT, self._createParseAction("IMPLIES", constraint)),
-    #         (iff, 2, opAssoc.RIGHT, self._createParseAction("IFF", constraint)),
-    #         (exists, 1, opAssoc.LEFT, self._createParseAction("EXISTS", constraint)),
-    #         # (exists_n, 1, opAssoc.RIGHT, self._createParseAction("EXISTN", constraint)),
-    #         (forall, 1, opAssoc.RIGHT, self._createParseAction("FORALL", constraint)),
-    #     ])
-    #
-    #     tree = formula.parseString(definition, parseAll=True)
-    #     return tree[0]
-
     def parse(self, definition, constraint):
 
-        left_parenthesis, right_parenthesis, colon = map(Suppress, "():")
+        left_parenthesis, right_parenthesis, colon, left_square, right_square = map(Suppress, "():[]")
         symbol = Word(alphas)
+
+
+        #Numbers
+        point = Literal('.')
+        e = CaselessLiteral('E')
+        plusorminus = Literal('+') | Literal('-')
         number = Word(nums)
-        number.setParseAction(self._createParseAction("Number", None))
+        integer = Combine(Optional(plusorminus) + number)
+        floatnumber = Combine(integer +
+                              Optional(point + Optional(number)) +
+                              Optional(e + integer)
+                              )
+        floatnumber.setParseAction(self._createParseAction("Number", constraint))
 
         ''' TERMS '''
         term = Forward()
         var = symbol
         var.setParseAction(self._createParseAction("Variable", constraint))
-        const = oneOf(list(world.individuals.keys()))
+        const = oneOf(list(world.individuals.keys())) | oneOf(list(world.domains.keys()))+ left_square +Word(nums) + right_square
         const.setParseAction(self._createParseAction("Constant", constraint))
+
+        # #Arithmetic Operators
+        # arithm_term = Forward()
+        # plus = Keyword("+")
+        # minus = Keyword("-")
+        # times = Keyword("*")
+        # divide = Keyword("/")
+        # arithm_term << infixNotation(term, [
+        #     (plus, 1, opAssoc.LEFT, self._createParseAction("PLUS", constraint)),
+        #     (minus, 2, opAssoc.LEFT, self._createParseAction("MINUS", constraint)),
+        #     (times, 2, opAssoc.LEFT, self._createParseAction("TIMES", constraint)),
+        #     (divide, 2, opAssoc.LEFT, self._createParseAction("DIVIDE", constraint)),
+        # ])
         func = oneOf(list(world.functions.keys()))
         func_term = func + left_parenthesis + delimitedList(term) + right_parenthesis
         func_term.setParseAction(self._createParseAction("Function", constraint))
-        term << (func_term | const | number | var )
+        # term << (func_term | arithm_term| const | number | var )
+        term << (func_term ^ const ^ floatnumber ^ var )
 
         ''' FORMULAS '''
         formula = Forward()
@@ -540,6 +607,8 @@ class FOLParser(object):
         exists_expression = exists + symbol + colon + Group(formula)
         exists_expression.setParseAction(self._createParseAction("EXISTS", constraint))
 
+        # arithm_relation = term + oneOf([">","<",">=","<="]) + term
+        # arithm_relation.setParseAction(self._createParseAction("ARITHM_REL", constraint))
 
         relation = oneOf(list(world.relations))
         atomic_formula = relation + left_parenthesis + delimitedList(term) + right_parenthesis
@@ -553,5 +622,7 @@ class FOLParser(object):
             (iff, 2, opAssoc.RIGHT, self._createParseAction("IFF", constraint))
         ])
 
-        tree = formula.parseString(definition, parseAll=True)
+        constraint = term ^ formula
+        tree = constraint.parseString(definition, parseAll=True)
+        # tree = formula.parseString(definition)
         return tree[0]

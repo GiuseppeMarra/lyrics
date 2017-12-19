@@ -2,7 +2,8 @@ import tensorflow as tf
 import utils
 import functions
 from functions import *
-from fuzzy import Lukasiewicz, LogicFactory
+from fuzzy import LogicFactory
+import re
 class World(object):
 
     def __init__(self, logic="lukasiewicz"):
@@ -25,17 +26,19 @@ class World(object):
 
 
 current_world = World()
-from parser import Variable, Constant, FOLParser
+from parser_future import Constant, FOLParser
 
 
 
 class Domain(object):
-    def __init__(self, label, data=None, dom_type=tf.float32):
+    def __init__(self, label, data, dom_type=tf.float32):
         if label in current_world.domains:
             raise Exception("Domain %s already exists" % label)
         self.dom_type = dom_type
         self.label = label
+        assert isinstance(data, tf.Tensor) or len(data)>0, "You need to provide at least one element of the domain %s" % (label)
         self.tensor = tf.convert_to_tensor(data)
+        assert len(self.tensor.get_shape())==2, "Data for domain %s must be a two-dimensional tensor(i.e. matrix)" % self.label
 
         current_world.domains[self.label] = self
 
@@ -81,8 +84,16 @@ class Function(object):
                 domains = current_world.domains[domains]
             self.domains = (domains,)
         current_world.functions[label] = self
+        self.arity = len(self.domains)
 
-        self.function = function
+
+        if function is None:
+            raise NotImplementedError("Default functions implementation in Function not yet implemented")
+        else:
+            self.function = function
+
+        if self.arity==1:
+            self.domain_value = self.function.call(self.domains[0].tensor)
 
 
     def evaluate(self, tensors):
@@ -108,9 +119,12 @@ class Relation(object):
         current_world.relations[label] = self
         self.arity = len(self.domains)
         if function is None:
-            raise NotImplementedError("Default Functions in Relation not yet implemented")
+            raise NotImplementedError("Default function implementation in Relation not yet implemented")
         else:
             self.function = function
+
+        if self.arity==1:
+            self.domain_value = self.function.call(self.domains[0].tensor)
 
     def evaluate(self, tensors):
 
@@ -130,6 +144,8 @@ class Constraint(object):
 
     def __init__(self, definition, weight=1.0):
 
+
+
         # String of the formula
         self.definition = definition
 
@@ -147,7 +163,6 @@ class Constraint(object):
         # We keep track of the columns range associated to each variable
         self.last_column = 0
 
-        self.atomics = {}
         # Parsing the FOL formula
         parser = FOLParser()
         self.root = parser.parse(self.definition, constraint=self)
@@ -163,45 +178,29 @@ class Constraint(object):
 
 
         # Compiling the expression tree
-        self.root.compile()
-        self.tensor = self.root.tensor
+        with tf.name_scope(re.sub('[^0-9a-zA-Z_]', '', self.definition)):
+            self.root.compile()
+            self.tensor = self.root.tensor
 
         # Adding a loss term to
         # tf.summary.scalar("Contraints/" + "_".join(definition.split()), 1 - self.tensor)
         # constraints_l += (1 - self.tensor)
         current_world.loss += weight * (1 - self.tensor)
 
-    def create_or_get_variable(self, var_name):
 
-        if var_name in self.variables_dict:
-            return self.variables_dict[var_name]
-
-        else:
-            new_var = Variable(var_name, self)
-            self.variables_dict[var_name] = new_var
-            self.variable_indices[var_name] = len(self.variables_list)
-            self.variables_list.append(new_var)
-            return new_var
-
-
-    def create_or_get_constant(self, id):
-        if id in self.constant_dict:
-            return self.constant_dict[id]
-        else:
-            new_const = Constant(id, self)
-            self.constant_dict[id] = new_const
-            return new_const
-
-def learn(learning_rate=0.001, num_epochs=1000, print_iters=1, sess=None):
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(current_world.loss)
+def learn(learning_rate=0.001, num_epochs=1000, print_iters=1, sess=None, vars = None, eval=None):
+    if vars is None:
+        train_op = tf.train.AdamOptimizer(learning_rate).minimize(current_world.loss)
+    else:
+        train_op = tf.train.AdamOptimizer(learning_rate).minimize(current_world.loss, var_list=vars)
     if sess is None:
         sess = tf.Session()
     sess.run(tf.global_variables_initializer())
 
     for i in range(num_epochs):
-        if i%print_iters==0:
-            _, cost = sess.run((train_op, current_world.loss))
-            print(cost)
+        if i%print_iters==0 and eval is not None:
+            _, val = sess.run((train_op,eval))
+            print(val)
         else:
             _ = sess.run(train_op)
 

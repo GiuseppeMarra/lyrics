@@ -40,6 +40,11 @@ class FuzzyLogic(object):
     def implication(a, b):
         raise NotImplementedError('users must define "implies" to use this base class')
 
+    @staticmethod
+    @abc.abstractmethod
+    def iff(a, b):
+        raise NotImplementedError('users must define "iff" to use this base class')
+
 
 class Lukasiewicz(FuzzyLogic):
 
@@ -63,15 +68,22 @@ class Lukasiewicz(FuzzyLogic):
 
     @staticmethod
     def exists(a, axis):
+
         return tf.reduce_max(a, axis=axis)
+        # return tf.log(tf.reduce_sum(tf.exp(a), axis=axis))
+        # return tf.minimum(1., tf.reduce_sum(a, axis=axis))
 
     @staticmethod
     def negation(a):
-        return 1 - a
+        return 1. - a
 
     @staticmethod
     def implication(a, b):
         return tf.minimum(1., 1 - a + b)
+
+    @staticmethod
+    def iff(a, b):
+        return 1 - tf.abs(a-b)
 
     @staticmethod
     def exists_n(a, axis, n):

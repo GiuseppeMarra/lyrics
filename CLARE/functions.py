@@ -12,14 +12,14 @@ class Function(object):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def call(self, a=None):
+    def call(self, *a):
         raise NotImplementedError('users must define "call" function to use this base class')
 
 class Learner(Function):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def call(self, a=None):
+    def call(self, *a):
         raise NotImplementedError('users must define "call" function to use this base class')
 
     @abc.abstractmethod
@@ -53,10 +53,10 @@ class Share(Learner):
 
     def __init__(self, function, domain):
         self.function = function
-        self.tensor = function.call(domain.tensor)
+        function.call(domain.tensor)
 
     def call(self, input=None):
-        return self.tensor
+        return self.function.call(input, reuse=True)
 
     def cost(self, labels, input=None):
         return self.function.cost(labels)
