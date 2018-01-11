@@ -1,9 +1,11 @@
 import tensorflow as tf
+import numpy as np
 import utils
 import functions
 from functions import *
 from fuzzy import LogicFactory
 import re
+import copy
 class World(object):
 
     def __init__(self, logic="lukasiewicz"):
@@ -22,7 +24,7 @@ class World(object):
 
         self.logic = LogicFactory.create(logic)
 
-        self.loss = tf.constant(0.)
+        self.loss = tf.constant(0., name="WorldLoss")
 
 
 current_world = World()
@@ -67,6 +69,33 @@ class Individual(object):
         current_world.individuals[self.label] = self
         self.domain.individuals[self.label] = tf.shape(self.domain.tensor)[0]
 
+def compute_domains_tensor(domains):
+
+    num_domains = len(domains)
+    domains_rows= [tf.shape(domain.tensor)[0] for domain in domains]
+    domains_columns = [tf.shape(domain.tensor)[1] for domain in domains]
+    tensors = []
+    for i,domain in enumerate(domains):
+        tensor = domain.tensor
+
+
+        to_reshape = [1 for _ in range(num_domains)]
+        to_reshape[i] = domains_rows[i]
+        to_reshape = to_reshape+ [domains_columns[i]]
+        tensor = tf.reshape(tensor, to_reshape)
+
+
+        to_repeat = copy.copy(domains_rows)
+        to_repeat[i] = 1
+        to_repeat = to_repeat+[1]
+        tensor = tf.tile(tensor, to_repeat)
+
+
+        tensor = tf.reshape(tensor, [-1, domains_columns[i]])
+        tensors.append(tensor)
+
+    return tensors
+
 class Function(object):
     def __init__(self, label, domains, function):
         if label in current_world.functions:
@@ -92,13 +121,9 @@ class Function(object):
         else:
             self.function = function
 
-        if self.arity==1:
-            self.domain_value = self.function.call(self.domains[0].tensor)
-
-
-    def evaluate(self, tensors):
-
-        return self.function.call(*tensors)
+        with tf.variable_scope("DomainValues_"+label):
+            domains_cartesian_tensors = compute_domains_tensor(self.domains)
+            self.function.precall(*domains_cartesian_tensors)
 
 class Relation(object):
     def __init__(self, label, domains, function=None):
@@ -123,20 +148,27 @@ class Relation(object):
         else:
             self.function = function
 
-        if self.arity==1:
-            self.domain_value = self.function.call(self.domains[0].tensor)
+        with tf.name_scope("DomainValues_"+label):
+            domains_cartesian_tensors = compute_domains_tensor(self.domains)
+            self.function.precall(*domains_cartesian_tensors)
 
-    def evaluate(self, tensors):
-
-        return self.function.call(*tensors)
 
 
 
 class PointwiseConstraint(object):
 
-    def __init__(self, output, labels):
+
+    def __init__(self, output, labels, inputs):
         if isinstance(output, functions.Learner):
-            current_world.loss += output.cost(labels)
+            current_world.loss += output.cost(labels, inputs)
+        # TODO other cases of output (i.e. CLARE.Relation or CLARE.Function)
+
+
+class RegularizationConstraint(object):
+
+    def __init__(self, function, weight):
+        if isinstance(function, functions.RegularizedLearner):
+            current_world.loss += weight * function.regularization_cost()
         # TODO other cases of output (i.e. CLARE.Relation or CLARE.Function)
 
 class Constraint(object):
@@ -167,18 +199,20 @@ class Constraint(object):
         parser = FOLParser()
         self.root = parser.parse(self.definition, constraint=self)
 
-        # This is the shape of the multi-dimensional tensor, where each dimension corresponds to a variable
-        if len(self.variables_list)>0: #not gounded formula
-            try:
-                self.cartesian_shape = [tf.shape(a.domain.tensor)[0] for a in self.variables_list]
-            except AttributeError: #None domain for a variable
-                raise Exception("In constraint [%s], a variable has not been used in any predicate or function" % self.definition)
-        else:
-            self.cartesian_shape = [1]
-
-
-        # Compiling the expression tree
         with tf.name_scope(re.sub('[^0-9a-zA-Z_]', '', self.definition)):
+
+            with tf.name_scope("CartesianShape"):
+                # This is the shape of the multi-dimensional tensor, where each dimension corresponds to a variable
+                if len(self.variables_list)>0: #not gounded formula
+                    try:
+                        self.cartesian_shape = [tf.shape(a.domain.tensor)[0] for a in self.variables_list]
+                    except AttributeError: #None domain for a variable
+                        raise Exception("In constraint [%s], a variable has not been used in any predicate or function" % self.definition)
+                else:
+                    self.cartesian_shape = [1]
+
+
+            # Compiling the expression tree
             self.root.compile()
             self.tensor = self.root.tensor
 
@@ -191,11 +225,16 @@ class Constraint(object):
 def learn(learning_rate=0.001, num_epochs=1000, print_iters=1, sess=None, vars = None, eval=None):
     if vars is None:
         train_op = tf.train.AdamOptimizer(learning_rate).minimize(current_world.loss)
+        sess.run(tf.global_variables_initializer())
     else:
-        train_op = tf.train.AdamOptimizer(learning_rate).minimize(current_world.loss, var_list=vars)
+        with tf.variable_scope("SpecializedRun"):
+            train_op = tf.train.AdamOptimizer(learning_rate).minimize(current_world.loss, var_list=vars)
+        sess.run(tf.variables_initializer(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="SpecializedRun")))
+        sess.run([v.initializer for v in vars])
     if sess is None:
         sess = tf.Session()
-    sess.run(tf.global_variables_initializer())
+        sess.run(tf.global_variables_initializer())
+
 
     for i in range(num_epochs):
         if i%print_iters==0 and eval is not None:

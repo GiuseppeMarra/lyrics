@@ -10,64 +10,72 @@ def reno(x):
 
 class Function(object):
     __metaclass__ = abc.ABCMeta
+    def __init__(self):
+        self.precomputed = None
 
     @abc.abstractmethod
     def call(self, *a):
         raise NotImplementedError('users must define "call" function to use this base class')
+
+    def precall(self, input=None):
+        if self.precomputed == None:
+            with tf.name_scope("PrecomputedValues"):
+                if input==None: raise Exception("The first use of precall must provide an input")
+                self.precomputed = self.call(input)
+        return self.precomputed
 
 class Learner(Function):
     __metaclass__ = abc.ABCMeta
 
-    @abc.abstractmethod
-    def call(self, *a):
+    def __init__(self):
+        super(Learner, self).__init__()
+
+    # @abc.abstractmethod
+    # def cost(self, labels, inputs):
+    #     raise NotImplementedError('users must define "call" function to use this base class')
+    #
+    # @abc.abstractmethod
+    # def evaluate(self, labels, inputs):
+    #     raise NotImplementedError('users must define "call" function to use this base class')
+
+class RegularizedLearner(Learner):
+    def __init__(self):
+        super(RegularizedLearner, self).__init__()
+
+
+    def regularization_cost(self):
         raise NotImplementedError('users must define "call" function to use this base class')
 
-    @abc.abstractmethod
-    def cost(self, labels, inputs):
-        raise NotImplementedError('users must define "call" function to use this base class')
-
-    @abc.abstractmethod
-    def evaluate(self, labels, inputs):
-        raise NotImplementedError('users must define "call" function to use this base class')
 
 
 class Slice(Learner):
     #Wrapper for slicing the output of a function. Commonly used in conjuction with share.
     def __init__(self, function, axis):
+        super(Slice, self).__init__()
         self.function = function
         self.axis = axis
 
     def call(self, input=None):
         return self.function.call(input)[:, self.axis]
 
-    def cost(self, labels, input=None):
-        raise Exception("Slice functions cost cannot be used. Use the cost on the sliced function")
+    def precall(self, input=None):
+        if self.precomputed == None:
+            with tf.name_scope("PrecomputedValues"):
+                if input==None: raise Exception("The first use of precall must provide an input")
+                self.precomputed = self.function.precall(input)[:, self.axis]
+        return self.precomputed
 
-    def evaluate(self, labels, input=None):
-        raise Exception("Slice functions evaluate cannot be used. Use the evaluate on the sliced function")
-
-
-class Share(Learner):
-    #Wrapper for sharing a function between different predicates over the same domain.
-    #Useful when predicates are outputs of a NN model in order to share all the hidden layers.
-
-    def __init__(self, function, domain):
-        self.function = function
-        function.call(domain.tensor)
-
-    def call(self, input=None):
-        return self.function.call(input, reuse=True)
-
-    def cost(self, labels, input=None):
-        return self.function.cost(labels)
-
-    def evaluate(self, labels, input=None):
-        return self.function.evaluate(labels)
+    # def cost(self, labels, input=None):
+    #     raise Exception("Slice functions cost cannot be used. Use the cost on the sliced function")
+    #
+    # def evaluate(self, labels, input=None):
+    #     raise Exception("Slice functions evaluate cannot be used. Use the evaluate on the sliced function")
 
 
 class FFNClassifier(Learner):
 
     def __init__(self, label, input_size, num_hidden_layers=1, size_layers=(20,)):
+        super(FFNClassifier, self).__init__()
         self.label = label
         self.num_hidden_layers = num_hidden_layers
         with tf.variable_scope("FFNClassifier_of_"+self.label, reuse=False) as scope:

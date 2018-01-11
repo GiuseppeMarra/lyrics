@@ -62,8 +62,8 @@ class Lukasiewicz(FuzzyLogic):
 
     @staticmethod
     def forall(a, axis):
-        # return tf.reduce_sum(a, axis=axis)
-        return tf.reduce_min(a, axis=axis)
+        return tf.reduce_mean(a, axis=axis)
+        # return tf.reduce_min(a, axis=axis)
         # return tf.maximum(tf.reduce_sum(a-1, axis=axis)+1,0)
 
     @staticmethod
