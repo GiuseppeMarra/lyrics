@@ -17,26 +17,11 @@ class Function(object):
     def call(self, *a):
         raise NotImplementedError('users must define "call" function to use this base class')
 
-    def precall(self, input=None):
-        if self.precomputed == None:
-            with tf.name_scope("PrecomputedValues"):
-                if input==None: raise Exception("The first use of precall must provide an input")
-                self.precomputed = self.call(input)
-        return self.precomputed
-
 class Learner(Function):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self):
         super(Learner, self).__init__()
-
-    # @abc.abstractmethod
-    # def cost(self, labels, inputs):
-    #     raise NotImplementedError('users must define "call" function to use this base class')
-    #
-    # @abc.abstractmethod
-    # def evaluate(self, labels, inputs):
-    #     raise NotImplementedError('users must define "call" function to use this base class')
 
 class RegularizedLearner(Learner):
     def __init__(self):
@@ -57,19 +42,6 @@ class Slice(Learner):
 
     def call(self, input=None):
         return self.function.call(input)[:, self.axis]
-
-    def precall(self, input=None):
-        if self.precomputed == None:
-            with tf.name_scope("PrecomputedValues"):
-                if input==None: raise Exception("The first use of precall must provide an input")
-                self.precomputed = self.function.precall(input)[:, self.axis]
-        return self.precomputed
-
-    # def cost(self, labels, input=None):
-    #     raise Exception("Slice functions cost cannot be used. Use the cost on the sliced function")
-    #
-    # def evaluate(self, labels, input=None):
-    #     raise Exception("Slice functions evaluate cannot be used. Use the evaluate on the sliced function")
 
 
 class FFNClassifier(Learner):

@@ -62,8 +62,9 @@ class Lukasiewicz(FuzzyLogic):
 
     @staticmethod
     def forall(a, axis):
-        return tf.reduce_mean(a, axis=axis)
-        # return tf.reduce_min(a, axis=axis)
+        # return tf.reduce_mean(a, axis=axis)
+        # return tf.reduce_sum(a, axis=axis)
+        return tf.reduce_min(a, axis=axis)
         # return tf.maximum(tf.reduce_sum(a-1, axis=axis)+1,0)
 
     @staticmethod
@@ -97,9 +98,175 @@ class Lukasiewicz(FuzzyLogic):
         red = tf.reduce_min(top,axis=max, keep_dims=True)
         return tf.transpose(red, r)
 
+class Goedel(FuzzyLogic):
+
+    @staticmethod
+    def weak_conj(args):
+        new_axis = len(args[0].get_shape())
+        arg = tf.stack(args, axis=new_axis)
+        return tf.reduce_min(arg, axis=new_axis)
+
+    @staticmethod
+    def strong_disj(args):
+        new_axis = len(args[0].get_shape())
+        arg = tf.stack(args, axis=new_axis)
+        return tf.reduce_max(arg, axis=new_axis)
+
+    @staticmethod
+    def forall(a, axis):
+        # return tf.reduce_mean(a, axis=axis)
+        return tf.reduce_sum(a, axis=axis)
+        # return tf.reduce_min(a, axis=axis)
+        # return tf.maximum(tf.reduce_sum(a-1, axis=axis)+1,0)
+
+    @staticmethod
+    def exists(a, axis):
+
+        return tf.reduce_max(a, axis=axis)
+        # return tf.log(tf.reduce_sum(tf.exp(a), axis=axis))
+        # return tf.minimum(1., tf.reduce_sum(a, axis=axis))
+
+    @staticmethod
+    def negation(a):
+        return 1. - a
+
+    @staticmethod
+    def implication(a, b):
+        return tf.where(b>a, tf.ones_like(b), b)
+
+    @staticmethod
+    def iff(a, b):
+        pass
+
+    @staticmethod
+    def exists_n(a, axis, n):
+        #top_k sorts only on the last dimension, so we need to transpose the input
+        max = len(a.get_shape()) -1
+        r = range(max+1)
+        r[axis] = max
+        r[max]=axis
+        a = tf.transpose(a,r)
+        top,_ = tf.nn.top_k(a, n)
+        red = tf.reduce_min(top,axis=max, keep_dims=True)
+        return tf.transpose(red, r)
+
+
+
+
+
+class ImpliesProduct(FuzzyLogic):
+
+    @staticmethod
+    def weak_conj(args):
+        new_axis = len(args[0].get_shape())
+        arg = tf.stack(args, axis=new_axis)
+        return tf.reduce_min(arg, axis=new_axis)
+
+    @staticmethod
+    def strong_disj(args):
+        new_axis = len(args[0].get_shape())
+        arg = tf.stack(args, axis=new_axis)
+        return tf.minimum(1., tf.reduce_sum(arg, axis=new_axis))
+
+    @staticmethod
+    def forall(a, axis):
+        return tf.reduce_mean(a, axis=axis)
+        # return tf.reduce_min(a, axis=axis)
+        # return tf.maximum(tf.reduce_sum(a-1, axis=axis)+1,0)
+
+    @staticmethod
+    def exists(a, axis):
+
+        return tf.reduce_max(a, axis=axis)
+        # return tf.log(tf.reduce_sum(tf.exp(a), axis=axis))
+        # return tf.minimum(1., tf.reduce_sum(a, axis=axis))
+
+    @staticmethod
+    def negation(a):
+        return 1. - a
+
+    @staticmethod
+    def implication(a, b):
+        return a*b
+
+    @staticmethod
+    def iff(a, b):
+        return 1 - tf.abs(a-b)
+
+    @staticmethod
+    def exists_n(a, axis, n):
+        #top_k sorts only on the last dimension, so we need to transpose the input
+        max = len(a.get_shape()) -1
+        r = range(max+1)
+        r[axis] = max
+        r[max]=axis
+        a = tf.transpose(a,r)
+        top,_ = tf.nn.top_k(a, n)
+        red = tf.reduce_min(top,axis=max, keep_dims=True)
+        return tf.transpose(red, r)
+
+class ForAllMin(FuzzyLogic):
+
+    @staticmethod
+    def weak_conj(args):
+        new_axis = len(args[0].get_shape())
+        arg = tf.stack(args, axis=new_axis)
+        return tf.reduce_min(arg, axis=new_axis)
+
+    @staticmethod
+    def strong_disj(args):
+        new_axis = len(args[0].get_shape())
+        arg = tf.stack(args, axis=new_axis)
+        return tf.minimum(1., tf.reduce_sum(arg, axis=new_axis))
+
+    @staticmethod
+    def forall(a, axis):
+        # return tf.reduce_mean(a, axis=axis)
+        return tf.reduce_min(a, axis=axis)
+        # return tf.maximum(tf.reduce_sum(a-1, axis=axis)+1,0)
+
+    @staticmethod
+    def exists(a, axis):
+
+        return tf.reduce_max(a, axis=axis)
+        # return tf.log(tf.reduce_sum(tf.exp(a), axis=axis))
+        # return tf.minimum(1., tf.reduce_sum(a, axis=axis))
+
+    @staticmethod
+    def negation(a):
+        return 1. - a
+
+    @staticmethod
+    def implication(a, b):
+        return a*b
+
+    @staticmethod
+    def iff(a, b):
+        return 1 - tf.abs(a-b)
+
+    @staticmethod
+    def exists_n(a, axis, n):
+        #top_k sorts only on the last dimension, so we need to transpose the input
+        max = len(a.get_shape()) -1
+        r = range(max+1)
+        r[axis] = max
+        r[max]=axis
+        a = tf.transpose(a,r)
+        top,_ = tf.nn.top_k(a, n)
+        red = tf.reduce_min(top,axis=max, keep_dims=True)
+        return tf.transpose(red, r)
+
+
+
 class LogicFactory:
 
     @staticmethod
     def create(logic):
         if logic=="lukasiewicz":
             return Lukasiewicz
+        elif logic=="implies_product":
+            return ImpliesProduct
+        elif logic=="forallmin":
+            return ForAllMin
+        elif logic =="Goedel":
+            return Goedel

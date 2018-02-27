@@ -1,5 +1,6 @@
 import tensorflow as tf
-
+import select
+import sys
 
 def isIterableNotString(o):
     if isinstance(o, str):
@@ -46,3 +47,18 @@ def cartesian(tensors):
     for i in range(1, len(tensors)):
         tensor = cartesian_product(tensor, tensors[i])
     return tensor
+
+
+def heardEnter():
+
+    ''' Listen for the user pressing ENTER '''
+
+    i,o,e = select.select([sys.stdin],[],[],0.0001)
+
+    for s in i:
+
+        if s == sys.stdin:
+            input = sys.stdin.readline()
+            return True
+
+    return False
