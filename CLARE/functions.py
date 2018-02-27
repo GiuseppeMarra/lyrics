@@ -23,10 +23,13 @@ class Learner(Function):
     def __init__(self):
         super(Learner, self).__init__()
 
+    def cost(self, labels, input=None):
+        raise NotImplementedError('users must define "cost" function to use this base class')
+
+
 class RegularizedLearner(Learner):
     def __init__(self):
         super(RegularizedLearner, self).__init__()
-
 
     def regularization_cost(self):
         raise NotImplementedError('users must define "call" function to use this base class')
