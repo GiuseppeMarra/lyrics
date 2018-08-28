@@ -5,7 +5,7 @@
 
 
 
-*DISCLAIMER: This is a work-in-progress repository*
+*DISCLAIMER: This is a work-in-progress repository. Code needs to be commented and we aim at providing you with a Jupiter notebook for each of them. Moreover, some advanced features of this framework are not used in any example and some examples are in order for them.*
 
 
 
