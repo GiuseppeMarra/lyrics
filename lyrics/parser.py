@@ -1,7 +1,8 @@
 from pyparsing import *
-from CLARE import current_world as world
+from lyrics import current_world as world
+from lyrics import actOpt
 import tensorflow as tf
-import operator
+import numpy as np
 import copy
 import constants
 ParserElement.enablePackrat()
@@ -88,6 +89,8 @@ class Constant(Term):
         else:
             self.domain = world.domains[domain]
             self.tensor = self.domain.tensor[index,:]
+        self.id = name
+
 
     def compile(self):
         pass
@@ -110,6 +113,7 @@ class Variable(Term):
 
 
        """
+    cache={}
 
     def __init__(self, name, constraint):
         super(Variable, self).__init__()
@@ -128,23 +132,32 @@ class Variable(Term):
         with tf.variable_scope("Variable_"+self.label):
             if self.tensor == None:
                 assert self.domain != None, "Trying to compile variable %s before assigning a domain" % self.label
-                self.tensor = self.domain.tensor
+                self.id = self.domain.label
+                if self.id in Variable.cache and actOpt:
+                    self.tensor = Variable.cache[self.id]
+                else:
+                    self.tensor = self.domain.tensor
+                    Variable.cache[self.id] = self.tensor
 
                 # Expanding the variable to the constraint shape (i.e. the one depending on the variables defined)
                 for i in range(len(self.constraint.variables_list)):
                     if self.constraint.variables_list[i] != self:
                         self.tensor = tf.expand_dims(self.tensor, i)
 
-    def check_or_assign_domain(self, domain):
+    def check_or_assign_domain(self, domain, force=False):
         """Variables do not know their domain until a Function or a Relation assign one to them on the basis
         of their domain."""
 
         if self.domain is None:
             self.domain = domain
+
         else:
-            assert self.domain == domain,\
+            assert self.domain == domain or self.domain in domain.ancestors,\
                    "Inconsistency between the domains in which variable %s has been used. Previous: %s, New: %s" %\
                     (self.label, self.domain.label, domain.label)
+            if force:
+                self.domain = domain
+
 
 def create_or_get_variable(tokens, constraint):
     var_name = tokens[0]
@@ -178,6 +191,7 @@ def create_or_get_constant(tokens, constraint):
 
 
 class Function(Term):
+    cache = {}
     def __init__(self, t, constraint):
         super(Function, self).__init__()
         self.constraint = constraint
@@ -210,29 +224,33 @@ class Function(Term):
                 if var not in self.vars:
                     self.vars.append(var)
 
+
     def compile(self):
+        self.id = self.label
         for i in self.args:
+            self.id = self.id + "_" + i.id
             i.compile()
 
+        '''We want to work always with tensors of the same number of dimensions (i.e. rank), that is
+        the cartesian shape of the constraint. In this code, we create a `function_shape`,
+        that is equal to the cartesian shape apart from those variables not present in this
+        function, whose dimensions will be set to 1'''
         with tf.name_scope("FunctionShape"):
             self.function_shape = copy.copy(self.constraint.cartesian_shape)
+
+
             set_ = set(self.vars)
             for i, var_constr in enumerate(self.constraint.variables_list):
                 if var_constr not in set_:
                     self.function_shape[i] = 1
-            fun_shape = tf.stack(self.function_shape, axis=0)
+            fun_shape = np.stack(self.function_shape, axis=0)
 
-        with tf.name_scope("Function_"+self.label):
 
-            if self.all_vars:
-                self.tensor = world._precomputed[constants.DOMAINS_VALUE+self.label]
-
-            else:
-                '''We want to work always with tensors of the same number of dimensions (i.e. rank), that is
-                the cartesian shape of the constraint. In this code, we create a `function_shape`,
-                that is equal to the cartesian shape apart from those variables not present in this
-                function, whose dimensions will be set to 1'''
-
+            # if self.all_vars:
+        if self.id in Function.cache and actOpt:
+            self.tensor = Function.cache[self.id]
+        else:
+            with tf.name_scope("Function_" + self.label):
 
                 with tf.name_scope("FunctionInputCreation"):
 
@@ -240,25 +258,35 @@ class Function(Term):
                     tensors = [] #tensor arguments for the function implementation
                     for arg in self.args:
 
-                        shape = tf.shape(arg.tensor)
-                        shape_arg = shape[:-1] # shape_arg is same rank of cartesian shape but with 1 in non-dependent variable; we do not consider domain dimension (-1)
-                        size = shape[-1] #domain dimension
-                        to_repeat = tf.reshape(fun_shape - shape_arg + 1, [-1]) # putting to 1 all existent axis
-
-                        to_repeat = tf.concat((to_repeat, [1]), axis = 0)  # adding no repetition for domain columns
-                        tensor = tf.tile(arg.tensor, to_repeat)
-                        tensor = tf.reshape(tensor, [-1, size]) # flattening the tensor into its cartesian product projection
+                        if self.function.features:
+                            tensor = arg.tensor
+                        else:
+                            # tensor = tf.reshape(tf.range(tf.shape(arg.tensor)[0]), [-1,1])
+                            range = tf.range(arg.tensor.get_shape()[0])
+                            tensor = tf.reshape(range, [np.prod(range.shape.as_list()),1])
+                        # shape = tf.shape(tensor)
+                        shape = tensor.shape.as_list()
+                        shape_arg = shape[:-1]  # shape_arg is same rank of cartesian shape but with 1 in non-dependent variable; we do not consider domain dimension (-1)
+                        size = shape[-1]  # domain dimension
+                        temp = fun_shape - shape_arg + 1  # putting to 1 all existent axis
+                        to_repeat = np.reshape(temp, [np.prod(temp.shape)])
+                        to_repeat = np.concatenate((to_repeat, [1]),axis=0)  # adding no repetition for domain columns
+                        tensor = tf.tile(tensor, to_repeat)
+                        tensor = tf.reshape(tensor, [np.prod(tensor.shape.as_list()) / size,size])  # flattening the tensor into its cartesian product projection
                         tensors.append(tensor)
 
-                self.tensor = self.function.function.call(*tensors)
+                self.tensor = self.function.function(*tensors)
+                Function.cache[self.id] = self.tensor
 
-            with tf.name_scope("FunctionOutputReshapeToConstraintShape"):
-            # bringing back the tensor to its function shape and putting the new dimension as last dimension
-                last_dim = tf.shape(self.tensor)[-1]
-                self.tensor = tf.reshape(self.tensor, tf.concat((fun_shape, [last_dim]), 0))
+        with tf.name_scope("FunctionOutputReshapeToConstraintShape"):
+        # bringing back the tensor to its function shape and putting the new dimension as last dimension
+        #     last_dim = tf.shape(self.tensor)[-1]
+            last_dim = np.array([self.tensor.shape.as_list()[-1]])
+            self.tensor = tf.reshape(self.tensor, tf.concat((fun_shape, last_dim), 0))
 
 
 class Atomic(object):
+    cache = {}
     def __init__(self, t, constraint):
         self.constraint = constraint
         self.label = t[0]
@@ -274,6 +302,7 @@ class Atomic(object):
 
         self._all_vars = True
         self.vars = []
+
         for i, arg in enumerate(self.args):
             assert isinstance(arg, Term),"Atomic object %s has an argument that is not a Term" % self.label
             if isinstance(arg, Constant):
@@ -292,9 +321,13 @@ class Atomic(object):
                     self.vars.append(var)
 
 
+
     def compile(self):
+        self.id = self.label
         for i in self.args:
             i.compile()
+            self.id = self.id + "_" + i.id
+
 
         with tf.name_scope("FunctionShape"):
             self.function_shape = copy.copy(self.constraint.cartesian_shape)
@@ -302,38 +335,45 @@ class Atomic(object):
             for i, var_constr in enumerate(self.constraint.variables_list):
                 if var_constr not in set_:
                     self.function_shape[i] = 1
-            fun_shape = tf.stack(self.function_shape, axis=0)
+            fun_shape = np.stack(self.function_shape, axis=0)
 
-        with tf.name_scope("Atomic_"+self.label):
 
-            if self._all_vars:
-                self.tensor = world._precomputed[constants.DOMAINS_VALUE+self.label]
+        if self.id in Atomic.cache and actOpt:
+            self.tensor = Atomic.cache[self.id]
+        else:
+            with tf.name_scope("Atomic_" + self.label):
 
-            else:
                 with tf.name_scope("FunctionInputCreation"):
                     tensors = []
                     for arg in self.args:
+                        if self.predicate.features:
+                            tensor = arg.tensor
+                        else:
+                            s = arg.tensor.shape.as_list()[:-1]
+                            tensor = tf.reshape(tf.range(tf.reduce_prod(s)), tf.concat((s,[1]), axis=0))
+                        shape = tensor.shape.as_list()
+                        shape_arg = shape[:-1]  # shape_arg is same rank of cartesian shape but with 1 in non-dependent variable; we do not consider domain dimension (-1)
+                        size = shape[-1]  # domain dimension
+                        temp = fun_shape - shape_arg + 1  # putting to 1 all existent axis
+                        to_repeat = np.reshape(temp, [np.prod(temp.shape)])
 
-                        shape = tf.shape(arg.tensor)
-                        shape_arg = shape[:-1] # not considering domain columns
-                        size = shape[-1]
-                        to_repeat = tf.reshape(fun_shape - shape_arg + 1, [-1])
-
-                        to_repeat = tf.concat((to_repeat, [1]), axis = 0)  # adding no repetition for domain columns
-                        tensor = tf.tile(arg.tensor, to_repeat)
-                        tensor = tf.reshape(tensor, [-1, size])
+                        to_repeat = np.concatenate((to_repeat, [1]), axis=0)  # adding no repetition for domain columns
+                        tensor = tf.tile(tensor, to_repeat)
+                        tensor = tf.reshape(tensor,[int(np.prod(tensor.shape.as_list())/size), size])  # flattening the tensor into its cartesian product projection
                         tensors.append(tensor)
 
-                self.tensor = self.predicate.function.call(*tensors)
+                self.tensor = self.predicate.function(*tensors)
+                Atomic.cache[self.id] = self.tensor
 
-
-            #Atomics tile immediately to cartesian shape (they are monodimensional)
-            #TODO think if it is necessary to make the connectives expand dimensions
-            with tf.name_scope("FunctionOutputReshapeToConstraintShape"):
-                self.tensor = tf.reshape(self.tensor, fun_shape)
-                shape_arg = tf.shape(self.tensor)
-                to_repeat = tf.stack(self.constraint.cartesian_shape, axis=0) - shape_arg + 1
-                self.tensor = tf.tile(self.tensor, to_repeat)
+        #Atomics tile immediately to cartesian shape (they are monodimensional)
+        #TODO think if it is necessary to make the connectives expand dimensions
+        with tf.name_scope("FunctionOutputReshapeToConstraintShape"):
+            self.tensor = tf.reshape(self.tensor, fun_shape)
+            shape_arg = self.tensor.shape.as_list()
+            to_repeat = np.stack(self.constraint.cartesian_shape, axis=0) - shape_arg + 1
+            temp = tf.tile(self.tensor, to_repeat)
+            self.tensor = tf.cond(self.predicate.lambda_block & self.constraint.validation_block, true_fn=lambda: tf.stop_gradient(temp),
+                                                                                            false_fn=lambda: temp)
 
 
 
@@ -402,6 +442,18 @@ class Or(Op):
         with tf.name_scope("Or"):
 
             self.tensor = world.logic.strong_disj([a.tensor for a in self.args])
+
+class Xor(Op):
+
+
+    def __init__(self, t):
+        super(Xor, self).__init__(t)
+
+    def compile(self):
+        super(Xor, self).compile()
+        with tf.name_scope("Xor"):
+
+            self.tensor = world.logic.exclusive_disj([a.tensor for a in self.args])
 
 
 class Iff(Op):
@@ -515,19 +567,27 @@ class Exists(Quantifier):
 
 class Exists_n(Quantifier):
     def __init__(self, constraint, t):
-        super(Exists_n, self).__init__(t)
+        # super(Exists_n, self).__init__(t)
         self.constraint = constraint
-        self.args = [t[0][3]]
-        self.label = t[0][0]
-        self.n = int(t[0][1])
-        self.var = t[0][2]
+        self.args = [t[3][0]]
+        self.label = t[0]
+        self.n = int(t[1])
+        self.var = t[2]
 
     def compile(self):
         super(Exists_n, self).compile()
         with tf.name_scope("Exists_n"):
-            var_axis = self.constraint.variables_indices[self.var.name]
+            var_axis = self.constraint.variable_indices[self.var.label]
             self.tensor = world.logic.exists_n(self.args[0].tensor, var_axis, self.n)
             self.constraint.cartesian_shape[var_axis] = 1
+
+
+def parse_and_filter(constraint, t):
+
+    filter = {}
+    for k,v in t:
+        filter[k.label] = v
+    constraint.filter(filter)
 
 
 class FOLParser(object):
@@ -557,6 +617,8 @@ class FOLParser(object):
                 return And(tokens)
             elif class_name == "OR":
                 return Or(tokens)
+            elif class_name == "XOR":
+                return Xor(tokens)
             elif class_name == "IMPLIES":
                 return Implies(tokens)
             elif class_name == "IFF":
@@ -570,7 +632,8 @@ class FOLParser(object):
             elif class_name == "ARITHM_REL":
                 #TODO
                 raise NotImplementedError("Arithmetic Relations not already implemented")
-
+            elif class_name == "FILTER":
+                 parse_and_filter(constraint, tokens)
 
         return _create
 
@@ -622,32 +685,42 @@ class FOLParser(object):
         not_ = Keyword("not")
         and_ = Keyword("and")
         or_ = Keyword("or")
+        xor = Keyword("xor")
         implies = Keyword("->")
         iff = Keyword("<->")
 
         forall = Keyword("forall")
         exists = Keyword("exists")
+        exist = Keyword("exist")
         forall_expression = forall + symbol + colon + Group(formula)
         forall_expression.setParseAction(self._createParseAction("FORALL", constraint))
         exists_expression = exists + symbol + colon + Group(formula)
         exists_expression.setParseAction(self._createParseAction("EXISTS", constraint))
+        esistn_expression = exist + number + symbol + colon + Group(formula)
+        esistn_expression.setParseAction(self._createParseAction("EXISTN", constraint))
 
-        # arithm_relation = term + oneOf([">","<",">=","<="]) + term
+        # arithm_relation = term + oneOf([">","<",">=","<=","="]) + term
         # arithm_relation.setParseAction(self._createParseAction("ARITHM_REL", constraint))
 
-        relation = oneOf(list(world.relations))
+        relation = oneOf(list(world.relations.keys()))
         atomic_formula = relation + left_parenthesis + delimitedList(term) + right_parenthesis
         atomic_formula.setParseAction(self._createParseAction("Atomic", constraint))
-        espression = forall_expression | exists_expression | atomic_formula
+        espression = forall_expression | exists_expression | esistn_expression | atomic_formula
         formula << infixNotation(espression, [
             (not_, 1, opAssoc.RIGHT, self._createParseAction("NOT", constraint)),
             (and_, 2, opAssoc.LEFT, self._createParseAction("AND", constraint)),
             (or_, 2, opAssoc.LEFT, self._createParseAction("OR", constraint)),
+            (xor, 2, opAssoc.LEFT, self._createParseAction("XOR", constraint)),
             (implies, 2, opAssoc.RIGHT, self._createParseAction("IMPLIES", constraint)),
             (iff, 2, opAssoc.RIGHT, self._createParseAction("IFF", constraint))
         ])
 
-        constraint = term ^ formula
+
+        domain = oneOf(world.domains.keys())
+        single_filter = Group(var + Suppress("in") + domain)
+        filter_expression = left_square + delimitedList(single_filter) + right_square
+        filter_expression.setParseAction(self._createParseAction("FILTER", constraint))
+        constraint = term ^ formula + Optional(filter_expression)
         tree = constraint.parseString(definition, parseAll=True)
         # tree = formula.parseString(definition)
         return tree[0]

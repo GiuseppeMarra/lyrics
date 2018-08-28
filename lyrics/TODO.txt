@@ -1,0 +1,43 @@
+How to handle the Slice: bot for optimization and n-ary functions
+
+Arithmetic +,-,*,/
+
+Integer Domains
+
+Allow any function input/output shape (handle fun_shape greater than one instead of linearize everything
+
+Codomain
+
+class PNode(object):
+
+........
+.......
+
+    def compile(self):
+        for i in self.args:
+            if i not in world.precomputed_dict[str(i)]:
+                i.compile()
+                world.precomputer_dict[str(i)] = i.tensor
+
+        self.label = self.label + "(" + ",".join([i.label for i in self.args]) + ")" ESCLUSO VARIABILE CHE USA UN TEMPLATE STANDARD
+
+
+
+Allow users to redefine all already provided arithmetic operators
+
+
+Global step in current world
+
+The cartesian product must be performed only on the variables on which the function depends on (e.g. forall x: forall y: f(x) + g(y)>0, f(x) must be computed only on the x domain not on the x domain repeated |Y| times)
+
+The time variables must be handled in a custom way, since recurrent networks already compute all timestamps and then it is absolutely useless to perform a cartesian product on them
+
+
+Check the call to .loss() is made only 1 time or notify if it is called multiple times. Notify if a constraint is defined after the loss is called
+
+
+One between data or columns must be provided to the Domain object (for empty domains)
+
+Check if the quantifiers need to keep the dimensions in order to work well in a non prenex form (very important!!!!)
+
+Add a reset cost function in current world
