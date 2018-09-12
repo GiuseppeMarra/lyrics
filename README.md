@@ -18,7 +18,7 @@ For example:
 
 ```python
     lyr.Domain(label="Points", data=some_tensor)
-    lyr.Relation(label="isA", domains=("Points"), function=isA())
+    lyr.Relation(label="A", domains=("Points"), function=isA())
 ```
 
 For each of such functions and relations, you can attach to it an opportune purpose-built function if it is already known, or you can learn it by an optimization program. In this case, you have to specify the general architecture of the function you are going to learn, e.g. an MLP, CNN, RNN and so on.
