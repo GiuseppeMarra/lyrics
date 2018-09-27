@@ -7,8 +7,7 @@
 
 *DISCLAIMER: This is a work-in-progress repository. Code needs to be commented and we aim at providing you with a Jupiter notebook for each of them. Moreover, some advanced features of this framework are not used in any example and some examples are in order for them.*
 
-
-
+*DISCLAIMER2: This code has been tested with Python 2.7 and Tensorflow 1.4.*
 
 ## Introduction
 This framework is aimed at facing both learning and inference tasks by requiring the satisfaction of a set of constraints on the domain of discourse. 
