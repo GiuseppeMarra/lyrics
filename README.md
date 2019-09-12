@@ -3,11 +3,11 @@
 
 (**L**earning **Y**ourself) (**R**easoning and **I**nference) with **C**onstraint**S**
 
+*DISCLAIMER: A new version of the theory and the correspondent framework can be found at: https://github.com/GiuseppeMarra/tf-logic*
 
+*DISCLAIMER2: This is a work-in-progress repository. Code needs to be commented and we aim at providing you with a Jupiter notebook for each of them. Moreover, some advanced features of this framework are not used in any example and some examples are in order for them.*
 
-*DISCLAIMER: This is a work-in-progress repository. Code needs to be commented and we aim at providing you with a Jupiter notebook for each of them. Moreover, some advanced features of this framework are not used in any example and some examples are in order for them.*
-
-*DISCLAIMER2: This code has been tested with Python 2.7 and Tensorflow 1.4.*
+*DISCLAIMER3: This code has been tested with Python 2.7 and Tensorflow 1.4.*
 
 ## Introduction
 This framework is aimed at facing both learning and inference tasks by requiring the satisfaction of a set of constraints on the domain of discourse. 
